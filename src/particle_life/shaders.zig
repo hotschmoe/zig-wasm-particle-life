@@ -8,9 +8,12 @@ const common_structs =
     \\struct Particle {
     \\    x: f32,
     \\    y: f32,
+    \\    z: f32,
     \\    vx: f32,
     \\    vy: f32,
+    \\    vz: f32,
     \\    species: f32,
+    \\    _pad: f32, // Padding to match 32-byte alignment in Zig
     \\}
     \\
     \\// Simulation options
@@ -19,6 +22,8 @@ const common_structs =
     \\    right: f32,
     \\    bottom: f32,
     \\    top: f32,
+    \\    back: f32,
+    \\    front: f32,
     \\    friction: f32,
     \\    dt: f32,
     \\    bin_size: f32,
@@ -27,8 +32,10 @@ const common_structs =
     \\    looping_borders: f32,
     \\    action_x: f32,
     \\    action_y: f32,
+    \\    action_z: f32,
     \\    action_vx: f32,
     \\    action_vy: f32,
+    \\    action_vz: f32,
     \\    action_force: f32,
     \\    action_radius: f32,
     \\}
@@ -43,24 +50,27 @@ const common_structs =
     \\
     \\// Bin information
     \\struct BinInfo {
-    \\    grid_size: vec2i,
-    \\    bin_id: vec2i,
+    \\    grid_size: vec3i,
+    \\    bin_id: vec3i,
     \\    bin_index: i32,
     \\}
     \\
     \\// Calculate which bin a position belongs to
-    \\fn getBinInfo(position: vec2f, options: SimulationOptions) -> BinInfo {
-    \\    let grid_size = vec2i(
+    \\fn getBinInfo(position: vec3f, options: SimulationOptions) -> BinInfo {
+    \\    let grid_size = vec3i(
     \\        i32(ceil((options.right - options.left) / options.bin_size)),
     \\        i32(ceil((options.top - options.bottom) / options.bin_size)),
+    \\        i32(ceil((options.front - options.back) / options.bin_size)),
     \\    );
     \\    
-    \\    let bin_id = vec2i(
+    \\    let bin_id = vec3i(
     \\        clamp(i32(floor((position.x - options.left) / options.bin_size)), 0, grid_size.x - 1),
     \\        clamp(i32(floor((position.y - options.bottom) / options.bin_size)), 0, grid_size.y - 1),
+    \\        clamp(i32(floor((position.z - options.back) / options.bin_size)), 0, grid_size.z - 1),
     \\    );
     \\    
-    \\    let bin_index = bin_id.y * grid_size.x + bin_id.x;
+    \\    // 3D index: z * (width * height) + y * width + x
+    \\    let bin_index = bin_id.z * (grid_size.x * grid_size.y) + bin_id.y * grid_size.x + bin_id.x;
     \\    
     \\    return BinInfo(grid_size, bin_id, bin_index);
     \\}
@@ -88,13 +98,13 @@ pub const spatial_binning = common_structs ++
     \\    }
     \\    
     \\    let particle = particles[id.x];
-    \\    let bin_info = getBinInfo(vec2f(particle.x, particle.y), options);
+    \\    let bin_info = getBinInfo(vec3f(particle.x, particle.y, particle.z), options);
     \\    
     \\    atomicAdd(&bin_size[bin_info.bin_index + 1], 1u);
     \\}
 ;
 
-/// Prefix sum for calculating bin offsets
+/// Prefix sum for calculating bin offsets (Same as 2D)
 pub const prefix_sum =
     \\@group(0) @binding(0) var<storage, read> source: array<u32>;
     \\@group(0) @binding(1) var<storage, read_write> destination: array<u32>;
@@ -138,14 +148,14 @@ pub const particle_sort = common_structs ++
     \\    }
     \\    
     \\    let particle = source[id.x];
-    \\    let bin_info = getBinInfo(vec2f(particle.x, particle.y), options);
+    \\    let bin_info = getBinInfo(vec3f(particle.x, particle.y, particle.z), options);
     \\    
     \\    let new_index = bin_offset[bin_info.bin_index] + atomicAdd(&bin_size[bin_info.bin_index], 1);
     \\    destination[new_index] = particle;
     \\}
 ;
 
-/// Force computation between particles
+/// Force computation between particles (3D)
 pub const force_computation = common_structs ++
     \\
     \\@group(0) @binding(0) var<storage, read> particles_source: array<Particle>;
@@ -162,62 +172,73 @@ pub const force_computation = common_structs ++
     \\    
     \\    var particle = particles_source[id.x];
     \\    let species = u32(particle.species);
-    \\    let bin_info = getBinInfo(vec2f(particle.x, particle.y), options);
+    \\    let bin_info = getBinInfo(vec3f(particle.x, particle.y, particle.z), options);
     \\    let looping_borders = options.looping_borders == 1.0;
     \\    
     \\    var bin_x_min = bin_info.bin_id.x - 1;
     \\    var bin_y_min = bin_info.bin_id.y - 1;
+    \\    var bin_z_min = bin_info.bin_id.z - 1;
     \\    var bin_x_max = bin_info.bin_id.x + 1;
     \\    var bin_y_max = bin_info.bin_id.y + 1;
+    \\    var bin_z_max = bin_info.bin_id.z + 1;
     \\    
     \\    if (!looping_borders) {
     \\        bin_x_min = max(0, bin_x_min);
     \\        bin_y_min = max(0, bin_y_min);
+    \\        bin_z_min = max(0, bin_z_min);
     \\        bin_x_max = min(bin_info.grid_size.x - 1, bin_x_max);
     \\        bin_y_max = min(bin_info.grid_size.y - 1, bin_y_max);
+    \\        bin_z_max = min(bin_info.grid_size.z - 1, bin_z_max);
     \\    }
     \\    
     \\    let width = options.right - options.left;
     \\    let height = options.top - options.bottom;
-    \\    var total_force = vec2f(0.0, 0.0);
-    \\    let particle_pos = vec2f(particle.x, particle.y);
+    \\    let depth = options.front - options.back;
+    \\    var total_force = vec3f(0.0, 0.0, 0.0);
+    \\    let particle_pos = vec3f(particle.x, particle.y, particle.z);
     \\    
     \\    total_force -= particle_pos * options.central_force;
     \\    
     \\    for (var bin_x = bin_x_min; bin_x <= bin_x_max; bin_x += 1) {
     \\        for (var bin_y = bin_y_min; bin_y <= bin_y_max; bin_y += 1) {
-    \\            let real_bin_x = (bin_x + bin_info.grid_size.x) % bin_info.grid_size.x;
-    \\            let real_bin_y = (bin_y + bin_info.grid_size.y) % bin_info.grid_size.y;
-    \\            let bin_index = real_bin_y * bin_info.grid_size.x + real_bin_x;
-    \\            
-    \\            let bin_start = bin_offset[bin_index];
-    \\            let bin_end = bin_offset[bin_index + 1];
-    \\            
-    \\            for (var j = bin_start; j < bin_end; j += 1) {
-    \\                if (j == id.x) {
-    \\                    continue;
-    \\                }
+    \\            for (var bin_z = bin_z_min; bin_z <= bin_z_max; bin_z += 1) {
+    \\                let real_bin_x = (bin_x + bin_info.grid_size.x) % bin_info.grid_size.x;
+    \\                let real_bin_y = (bin_y + bin_info.grid_size.y) % bin_info.grid_size.y;
+    \\                let real_bin_z = (bin_z + bin_info.grid_size.z) % bin_info.grid_size.z;
+    \\                let bin_index = real_bin_z * (bin_info.grid_size.x * bin_info.grid_size.y) + real_bin_y * bin_info.grid_size.x + real_bin_x;
     \\                
-    \\                let other = particles_source[j];
-    \\                let other_species = u32(other.species);
-    \\                let force = forces[species * u32(options.species_count) + other_species];
+    \\                let bin_start = bin_offset[bin_index];
+    \\                let bin_end = bin_offset[bin_index + 1];
     \\                
-    \\                var r = vec2f(other.x, other.y) - particle_pos;
-    \\                
-    \\                if (looping_borders) {
-    \\                    if (abs(r.x) >= width * 0.5) {
-    \\                        r.x -= sign(r.x) * width;
+    \\                for (var j = bin_start; j < bin_end; j += 1) {
+    \\                    if (j == id.x) {
+    \\                        continue;
     \\                    }
-    \\                    if (abs(r.y) >= height * 0.5) {
-    \\                        r.y -= sign(r.y) * height;
+    \\
+    \\                    let other = particles_source[j];
+    \\                    let other_species = u32(other.species);
+    \\                    let force = forces[species * u32(options.species_count) + other_species];
+    \\
+    \\                    var r = vec3f(other.x, other.y, other.z) - particle_pos;
+    \\
+    \\                    if (looping_borders) {
+    \\                        if (abs(r.x) >= width * 0.5) {
+    \\                            r.x -= sign(r.x) * width;
+    \\                        }
+    \\                        if (abs(r.y) >= height * 0.5) {
+    \\                            r.y -= sign(r.y) * height;
+    \\                        }
+    \\                        if (abs(r.z) >= depth * 0.5) {
+    \\                            r.z -= sign(r.z) * depth;
+    \\                        }
     \\                    }
-    \\                }
-    \\                
-    \\                let d = length(r);
-    \\                if (d > 0.0 && d < force.radius) {
-    \\                    let n = r / d;
-    \\                    total_force += force.strength * max(0.0, 1.0 - d / force.radius) * n;
-    \\                    total_force -= force.collision_strength * max(0.0, 1.0 - d / force.collision_radius) * n;
+    \\
+    \\                    let d = length(r);
+    \\                    if (d > 0.0 && d < force.radius) {
+    \\                        let n = r / d;
+    \\                        total_force += force.strength * max(0.0, 1.0 - d / force.radius) * n;
+    \\                        total_force -= force.collision_strength * max(0.0, 1.0 - d / force.collision_radius) * n;
+    \\                    }
     \\                }
     \\            }
     \\        }
@@ -225,12 +246,13 @@ pub const force_computation = common_structs ++
     \\    
     \\    particle.vx += total_force.x * options.dt;
     \\    particle.vy += total_force.y * options.dt;
+    \\    particle.vz += total_force.z * options.dt;
     \\    
     \\    particles_destination[id.x] = particle;
     \\}
 ;
 
-/// Particle advancement - integrate velocity and handle boundaries
+/// Particle advancement - integrate velocity and handle boundaries (3D)
 pub const particle_advance = common_structs ++
     \\
     \\@group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -244,10 +266,11 @@ pub const particle_advance = common_structs ++
     \\    
     \\    let width = options.right - options.left;
     \\    let height = options.top - options.bottom;
+    \\    let depth = options.front - options.back;
     \\    var particle = particles[id.x];
     \\    
-    \\    // Apply action force (user interaction)
-    \\    var action_r = vec2f(particle.x, particle.y) - vec2f(options.action_x, options.action_y);
+    \\    // Apply action force (user interaction) - mostly 2D interaction projected or 3D if UI supports
+    \\    var action_r = vec3f(particle.x, particle.y, particle.z) - vec3f(options.action_x, options.action_y, options.action_z);
     \\    if (options.looping_borders == 1.0) {
     \\        if (abs(action_r.x) >= width * 0.5) {
     \\            action_r.x -= sign(action_r.x) * width;
@@ -255,18 +278,24 @@ pub const particle_advance = common_structs ++
     \\        if (abs(action_r.y) >= height * 0.5) {
     \\            action_r.y -= sign(action_r.y) * height;
     \\        }
+    \\        if (abs(action_r.z) >= depth * 0.5) {
+    \\            action_r.z -= sign(action_r.z) * depth;
+    \\        }
     \\    }
     \\    let action_factor = options.action_force * exp(-dot(action_r, action_r) / (options.action_radius * options.action_radius));
     \\    particle.vx += options.action_vx * action_factor;
     \\    particle.vy += options.action_vy * action_factor;
+    \\    particle.vz += options.action_vz * action_factor;
     \\    
     \\    // Apply friction
     \\    particle.vx *= options.friction;
     \\    particle.vy *= options.friction;
+    \\    particle.vz *= options.friction;
     \\    
     \\    // Integrate velocity -> position
     \\    particle.x += particle.vx * options.dt;
     \\    particle.y += particle.vy * options.dt;
+    \\    particle.z += particle.vz * options.dt;
     \\    
     \\    // Handle boundaries
     \\    let looping_borders = options.looping_borders == 1.0;
@@ -283,6 +312,12 @@ pub const particle_advance = common_structs ++
     \\        }
     \\        if (particle.y > options.top) {
     \\            particle.y -= height;
+    \\        }
+    \\        if (particle.z < options.back) {
+    \\            particle.z += depth;
+    \\        }
+    \\        if (particle.z > options.front) {
+    \\            particle.z -= depth;
     \\        }
     \\    } else {
     \\        if (particle.x < options.left) {
@@ -301,13 +336,21 @@ pub const particle_advance = common_structs ++
     \\            particle.y = options.top;
     \\            particle.vy *= -1.0;
     \\        }
+    \\        if (particle.z < options.back) {
+    \\            particle.z = options.back;
+    \\            particle.vz *= -1.0;
+    \\        }
+    \\        if (particle.z > options.front) {
+    \\            particle.z = options.front;
+    \\            particle.vz *= -1.0;
+    \\        }
     \\    }
     \\    
     \\    particles[id.x] = particle;
     \\}
 ;
 
-/// Particle Initialization on GPU
+/// Particle Initialization on GPU (3D)
 pub const particle_init = common_structs ++
     \\
     \\@group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -333,26 +376,31 @@ pub const particle_init = common_structs ++
     \\    var p = particles[id.x];
     \\    
     \\    // Random position
-    \\    let r1 = random_float(id.x * 5u + 0u, seed);
-    \\    let r2 = random_float(id.x * 5u + 1u, seed);
+    \\    let r1 = random_float(id.x * 7u + 0u, seed);
+    \\    let r2 = random_float(id.x * 7u + 1u, seed);
+    \\    let r3 = random_float(id.x * 7u + 2u, seed);
     \\    
     \\    let width = options.right - options.left;
     \\    let height = options.top - options.bottom;
+    \\    let depth = options.front - options.back;
     \\    
     \\    p.x = options.left + r1 * width;
     \\    p.y = options.bottom + r2 * height;
+    \\    p.z = options.back + r3 * depth;
     \\    
     \\    // Random velocity
-    \\    let r3 = random_float(id.x * 5u + 2u, seed);
-    \\    let r4 = random_float(id.x * 5u + 3u, seed);
+    \\    let r4 = random_float(id.x * 7u + 3u, seed);
+    \\    let r5 = random_float(id.x * 7u + 4u, seed);
+    \\    let r6 = random_float(id.x * 7u + 5u, seed);
     \\    let v_scale = 10.0; 
     \\    
-    \\    p.vx = (r3 * 2.0 - 1.0) * v_scale;
-    \\    p.vy = (r4 * 2.0 - 1.0) * v_scale;
+    \\    p.vx = (r4 * 2.0 - 1.0) * v_scale;
+    \\    p.vy = (r5 * 2.0 - 1.0) * v_scale;
+    \\    p.vz = (r6 * 2.0 - 1.0) * v_scale;
     \\    
     \\    // Random species
-    \\    let r5 = random_float(id.x * 5u + 4u, seed);
-    \\    p.species = floor(r5 * options.species_count);
+    \\    let r7 = random_float(id.x * 7u + 6u, seed);
+    \\    p.species = floor(r7 * options.species_count);
     \\    if (p.species >= options.species_count) {
     \\        p.species = options.species_count - 1.0;
     \\    }
@@ -362,15 +410,18 @@ pub const particle_init = common_structs ++
 ;
 
 /// Simple particle point rendering shader
-/// Renders each particle as a colored point based on its species
+/// Renders each particle as a colored point based on its species (Isometric projection)
 pub const particle_render_point =
     \\// Particle structure (must match Zig layout)
     \\struct Particle {
     \\    x: f32,
     \\    y: f32,
+    \\    z: f32,
     \\    vx: f32,
     \\    vy: f32,
+    \\    vz: f32,
     \\    species: f32,
+    \\    _pad: f32,
     \\}
     \\
     \\// Species color
@@ -382,6 +433,7 @@ pub const particle_render_point =
     \\struct Camera {
     \\    center_x: f32,
     \\    center_y: f32,
+    \\    center_z: f32,
     \\    extent_x: f32,
     \\    extent_y: f32,
     \\    pixels_per_unit: f32,
@@ -422,14 +474,28 @@ pub const particle_render_point =
     \\    } else {
     \\        local_pos = vec2f(-size, size);
     \\    }
+    \\
+    \\    // Isometric projection
+    \\    // x_iso = (x - z) * cos(30)
+    \\    // y_iso = y + (x + z) * sin(30)
+    \\    // Simplified:
+    \\    let cos30 = 0.866;
+    \\    let sin30 = 0.5;
+    \\
+    \\    let px = particle.x - camera.center_x;
+    \\    let py = particle.y - camera.center_y;
+    \\    let pz = particle.z - camera.center_z;
+    \\
+    \\    let x_iso = (px - pz) * cos30;
+    \\    let y_iso = py + (px + pz) * sin30;
     \\    
-    \\    // World position
-    \\    let world_x = particle.x + local_pos.x;
-    \\    let world_y = particle.y + local_pos.y;
+    \\    // World position (projected)
+    \\    let world_x = x_iso + local_pos.x;
+    \\    let world_y = y_iso + local_pos.y;
     \\    
     \\    // Camera transform to NDC
-    \\    let ndc_x = (world_x - camera.center_x) / camera.extent_x;
-    \\    let ndc_y = (world_y - camera.center_y) / camera.extent_y;
+    \\    let ndc_x = world_x / camera.extent_x;
+    \\    let ndc_y = world_y / camera.extent_y;
     \\    
     \\    var output: VertexOutput;
     \\    output.position = vec4f(ndc_x, ndc_y, 0.0, 1.0);
@@ -444,15 +510,18 @@ pub const particle_render_point =
     \\}
 ;
 
-/// Common shader structures for HDR rendering
+/// Common shader structures for HDR rendering (3D)
 const common_render_structs =
     \\// Particle structure
     \\struct Particle {
     \\    x: f32,
     \\    y: f32,
+    \\    z: f32,
     \\    vx: f32,
     \\    vy: f32,
+    \\    vz: f32,
     \\    species: f32,
+    \\    _pad: f32,
     \\}
     \\
     \\// Species color
@@ -462,7 +531,7 @@ const common_render_structs =
     \\
     \\// Camera parameters
     \\struct Camera {
-    \\    center: vec2f,
+    \\    center: vec3f,
     \\    extent: vec2f,
     \\    pixels_per_unit: f32,
     \\}
@@ -488,18 +557,28 @@ const common_render_structs =
     \\    vec2f( 1.0, -1.0),
     \\    vec2f( 1.0,  1.0),
     \\);
+    \\
+    \\fn isometricProject(p: vec3f, camera_center: vec3f) -> vec2f {
+    \\    let cos30 = 0.866;
+    \\    let sin30 = 0.5;
+    \\    let d = p - camera_center;
+    \\    let x = (d.x - d.z) * cos30;
+    \\    let y = d.y + (d.x + d.z) * sin30;
+    \\    return vec2f(x, y);
+    \\}
 ;
 
-/// Glow effect renderer - soft, large halos
+/// Glow effect renderer - soft, large halos (Isometric)
 pub const particle_render_glow = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexGlow(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
     \\    let offset = offsets[id % 6u];
-    \\    let position = vec2f(particle.x, particle.y) + 12.0 * offset;
+    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
+    \\    let position = projected_pos + 12.0 * offset;
     \\    return CircleVertexOut(
-    \\        vec4f((position - camera.center) / camera.extent, 0.0, 1.0),
+    \\        vec4f(position / camera.extent, 0.0, 1.0),
     \\        offset,
     \\        species[u32(particle.species)].color
     \\    );
@@ -513,16 +592,17 @@ pub const particle_render_glow = common_render_structs ++
     \\}
 ;
 
-/// Circle renderer - solid particles with anti-aliased edges (for zoomed in view)
+/// Circle renderer - solid particles with anti-aliased edges (Isometric)
 pub const particle_render_circle = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexCircle(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
     \\    let offset = offsets[id % 6u] * 1.5;
-    \\    let position = vec2f(particle.x, particle.y) + offset;
+    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
+    \\    let position = projected_pos + offset;
     \\    return CircleVertexOut(
-    \\        vec4f((position - camera.center) / camera.extent, 0.0, 1.0),
+    \\        vec4f(position / camera.extent, 0.0, 1.0),
     \\        offset,
     \\        species[u32(particle.species)].color
     \\    );
@@ -535,16 +615,17 @@ pub const particle_render_circle = common_render_structs ++
     \\}
 ;
 
-/// Point renderer - tiny square particles (for zoomed out view)
+/// Point renderer - tiny square particles (Isometric)
 pub const particle_render_point_hdr = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexPoint(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
     \\    let offset = 2.0 * offsets[id % 6u] / camera.pixels_per_unit;
-    \\    let position = vec2f(particle.x, particle.y) + offset;
+    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
+    \\    let position = projected_pos + offset;
     \\    return CircleVertexOut(
-    \\        vec4f((position - camera.center) / camera.extent, 0.0, 1.0),
+    \\        vec4f(position / camera.extent, 0.0, 1.0),
     \\        offset,
     \\        species[u32(particle.species)].color
     \\    );
@@ -561,6 +642,7 @@ pub const particle_render_point_hdr = common_render_structs ++
 ;
 
 /// Compositing shader - HDR to screen with tonemapping
+/// (Unchanged, operates on 2D texture)
 pub const compose_shader =
     \\@group(0) @binding(0) var hdr_texture: texture_2d<f32>;
     \\@group(0) @binding(1) var blue_noise_texture: texture_2d<f32>;

@@ -11,14 +11,16 @@ const pipeline = @import("../webgpu/pipeline.zig");
 const compute = @import("../webgpu/compute.zig");
 const device = @import("../webgpu/device.zig");
 
-/// Calculate grid size and bin count for spatial hashing
-pub fn calculateGridSize(sim_width: f32, sim_height: f32, bin_size: f32) struct { grid_x: u32, grid_y: u32, bin_count: u32 } {
+/// Calculate grid size and bin count for spatial hashing (3D)
+pub fn calculateGridSize(sim_width: f32, sim_height: f32, sim_depth: f32, bin_size: f32) struct { grid_x: u32, grid_y: u32, grid_z: u32, bin_count: u32 } {
     const grid_x = @as(u32, @intFromFloat(@ceil(sim_width / bin_size)));
     const grid_y = @as(u32, @intFromFloat(@ceil(sim_height / bin_size)));
+    const grid_z = @as(u32, @intFromFloat(@ceil(sim_depth / bin_size)));
     return .{
         .grid_x = grid_x,
         .grid_y = grid_y,
-        .bin_count = grid_x * grid_y,
+        .grid_z = grid_z,
+        .bin_count = grid_x * grid_y * grid_z,
     };
 }
 
@@ -78,20 +80,24 @@ pub const SpatialPipeline = struct {
         options_buffer: buffer.Buffer,
         sim_width: f32,
         sim_height: f32,
+        sim_depth: f32, // Added depth
         max_force_radius: f32,
     ) !SpatialPipeline {
         _ = particle_count; // Will use for initial buffer sizing if needed
         log("Setting up spatial optimization pipeline...");
 
-        const grid = calculateGridSize(sim_width, sim_height, max_force_radius);
+        const grid = calculateGridSize(sim_width, sim_height, sim_depth, max_force_radius);
         const bin_count = grid.bin_count;
         const prefix_sum_iterations = calculatePrefixSumIterations(bin_count);
 
-        logInt("  Grid size:", grid.grid_x);
+        logInt("  Grid X:", grid.grid_x);
+        logInt("  Grid Y:", grid.grid_y);
+        logInt("  Grid Z:", grid.grid_z);
         logInt("  Bin count:", bin_count);
         logInt("  Prefix sum iterations:", prefix_sum_iterations);
 
         // Create additional buffers
+        // 3D particles are larger (32 bytes), but buffer size is calculated by stride * count, so correct.
         const particle_temp_buffer = buffer.createStorageBuffer(particle_buffer.size);
         const bin_offset_buffer = buffer.createStorageBuffer((bin_count + 1) * 4);
         const bin_offset_temp_buffer = buffer.createStorageBuffer((bin_count + 1) * 4);

@@ -23,6 +23,7 @@ pub const Simulation = struct {
     species_count: u32,
     sim_width: f32,
     sim_height: f32,
+    sim_depth: f32,
 
     // GPU buffers
     particle_buffer: buffer.Buffer,
@@ -86,6 +87,7 @@ pub const Simulation = struct {
         species_count: u32,
         sim_width: f32,
         sim_height: f32,
+        sim_depth: f32,
         seed: u32,
         symmetric_forces: bool,
         friction_coefficient: f32,
@@ -95,9 +97,10 @@ pub const Simulation = struct {
             .species_count = species_count,
             .sim_width = sim_width,
             .sim_height = sim_height,
+            .sim_depth = sim_depth,
             .rng = system.Rng.init(seed),
-            .options = particle.SimulationOptions.init(sim_width, sim_height, species_count),
-            .camera = particle.CameraParams.initForSimulation(1024.0, 768.0, sim_width, sim_height), // Will be updated on resize
+            .options = particle.SimulationOptions.init(sim_width, sim_height, sim_depth, species_count),
+            .camera = particle.CameraParams.initForSimulation(1024.0, 768.0, sim_width, sim_height, sim_depth), // Will be updated on resize
             .symmetric_forces = symmetric_forces,
             .friction_coefficient = friction_coefficient,
             .particle_buffer = undefined,
@@ -161,6 +164,7 @@ pub const Simulation = struct {
         sim.physics_pipeline = try physics.Physics.init(sim.particle_buffer, sim.options_buffer);
 
         // Set up spatial optimization pipeline (the real deal!)
+        // Note: SpatialPipeline might need updates to handle Z dimension too if it uses grid size
         sim.spatial_pipeline = try spatial.SpatialPipeline.init(
             sim.particle_buffer,
             particle_count,
@@ -487,6 +491,8 @@ pub const Simulation = struct {
             self.camera.center_x -= input.pan_x * pan_speed;
             self.camera.center_y += input.pan_y * pan_speed;
 
+            // TODO: Implement Z panning if needed, e.g. using mouse wheel with modifier key
+
             self.camera_buffer.writeTyped(particle.CameraParams, 0, &[_]particle.CameraParams{self.camera});
         }
 
@@ -495,12 +501,13 @@ pub const Simulation = struct {
             const zoom_speed = 0.001;
             const zoom_factor = 1.0 + input.zoom_delta * zoom_speed;
 
-            // Zoom towards mouse position
+            // Zoom towards mouse position (2D only for now)
             // 1. Convert mouse to world space relative to camera center
             // Mouse is in pixels from top-left. Center is at canvas_width/2, canvas_height/2
             const mouse_x_ndc = (input.mouse_x / @as(f32, @floatFromInt(self.canvas_width))) * 2.0 - 1.0;
             const mouse_y_ndc = 1.0 - (input.mouse_y / @as(f32, @floatFromInt(self.canvas_height))) * 2.0; // Flip Y
 
+            // Simple 2D approximation for zoom logic
             const mouse_world_x = self.camera.center_x + mouse_x_ndc * self.camera.extent_x;
             const mouse_world_y = self.camera.center_y + mouse_y_ndc * self.camera.extent_y;
 
@@ -509,11 +516,6 @@ pub const Simulation = struct {
             self.camera.extent_y *= zoom_factor;
 
             // 3. Adjust center to keep mouse at same world position (approximate)
-            // New world pos of mouse cursor would be: new_center + mouse_ndc * new_extent
-            // We want new_world_pos == old_world_pos
-            // old_world_pos = new_center + mouse_ndc * new_extent
-            // new_center = old_world_pos - mouse_ndc * new_extent
-
             self.camera.center_x = mouse_world_x - mouse_x_ndc * self.camera.extent_x;
             self.camera.center_y = mouse_world_y - mouse_y_ndc * self.camera.extent_y;
 
@@ -528,12 +530,17 @@ pub const Simulation = struct {
             const canvas_width_f: f32 = @as(f32, @floatFromInt(self.canvas_width));
             const canvas_height_f: f32 = @as(f32, @floatFromInt(self.canvas_height));
 
-            // Convert mouse to world space
+            // Convert mouse to world space (Isometric approximation - this is tricky without raycasting)
+            // For now, assume Z = 0 plane for interaction
             const mouse_x_ndc = if (canvas_width_f > 0) (input.mouse_x / canvas_width_f) * 2.0 - 1.0 else 0.0;
             const mouse_y_ndc = if (canvas_height_f > 0) 1.0 - (input.mouse_y / canvas_height_f) * 2.0 else 0.0;
 
+            // Inverse isometric projection (approximate)
+            // This is just mapping screen X/Y to world X/Y assuming Z=0.
+            // Better logic would be needed for true 3D interaction.
             self.options.action_x = self.camera.center_x + mouse_x_ndc * self.camera.extent_x;
             self.options.action_y = self.camera.center_y + mouse_y_ndc * self.camera.extent_y;
+            self.options.action_z = self.camera.center_z;
 
             // Mouse drag (screen space) -> world velocity
             const drag_x_ndc = if (canvas_width_f > 0) (input.mouse_dx * 2.0) / canvas_width_f else 0.0;
@@ -541,6 +548,7 @@ pub const Simulation = struct {
 
             self.options.action_vx = self.camera.extent_x * drag_x_ndc;
             self.options.action_vy = self.camera.extent_y * drag_y_ndc;
+            self.options.action_vz = 0.0;
 
             // Set action parameters
             self.options.action_radius = self.camera.extent_x / 16.0;
@@ -549,6 +557,7 @@ pub const Simulation = struct {
             self.options.action_force = 0.0;
             self.options.action_vx = 0.0;
             self.options.action_vy = 0.0;
+            self.options.action_vz = 0.0;
             self.options.action_radius = 0.0;
         }
     }
@@ -582,7 +591,7 @@ pub const Simulation = struct {
             log("HDR texture recreated for new canvas size");
         }
 
-        self.camera = particle.CameraParams.initForSimulation(canvas_width, canvas_height, self.sim_width, self.sim_height);
+        self.camera = particle.CameraParams.initForSimulation(canvas_width, canvas_height, self.sim_width, self.sim_height, self.sim_depth);
         self.camera_buffer.writeTyped(particle.CameraParams, 0, &[_]particle.CameraParams{self.camera});
 
         camera_update_count += 1;
@@ -592,6 +601,7 @@ pub const Simulation = struct {
             logInt("  Canvas height:", new_height);
             logInt("  Sim width:", @as(u32, @intFromFloat(self.sim_width)));
             logInt("  Sim height:", @as(u32, @intFromFloat(self.sim_height)));
+            logInt("  Sim depth:", @as(u32, @intFromFloat(self.sim_depth)));
 
             // Log camera extent
             var buf: [128]u8 = undefined;
