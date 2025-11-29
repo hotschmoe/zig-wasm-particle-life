@@ -30,6 +30,7 @@ var particle_count: u32 = 65536; // Default matches slider
 var species_count: u32 = 6; // Default matches slider
 var sim_width: f32 = 1024.0; // Default matches slider
 var sim_height: f32 = 1024.0; // Default matches slider
+var sim_depth: f32 = 1024.0; // 3D depth
 
 // WASM FFI exports - these will be called from JavaScript
 
@@ -116,7 +117,7 @@ export fn update(dt: f32) void {
 
 /// Initialize the particle simulation
 fn initSimulation() void {
-    log("=== Initializing Particle Life Simulation ===");
+    log("=== Initializing Particle Life Simulation (3D) ===");
 
     // Clean up existing simulation if any
     if (sim) |*s| {
@@ -129,6 +130,7 @@ fn initSimulation() void {
         species_count,
         sim_width,
         sim_height,
+        sim_depth,
         initial_seed,
         webinputs.state.symmetric_forces,
         webinputs.state.friction,
@@ -166,10 +168,11 @@ export fn setSpeciesCount(count: u32) void {
     }
 }
 
-export fn setSimulationSize(width: f32, height: f32) void {
-    if (sim_width != width or sim_height != height) {
+export fn setSimulationSize(width: f32, height: f32, depth: f32) void {
+    if (sim_width != width or sim_height != height or sim_depth != depth) {
         sim_width = width;
         sim_height = height;
+        sim_depth = depth;
         if (sim_initialized) {
             initSimulation();
         }
