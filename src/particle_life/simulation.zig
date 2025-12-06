@@ -173,6 +173,7 @@ pub const Simulation = struct {
             sim.options_buffer,
             sim_width,
             sim_height,
+            sim.sim_depth,
             sim.max_force_radius,
         );
 
@@ -525,24 +526,56 @@ pub const Simulation = struct {
             self.camera_buffer.writeTyped(particle.CameraParams, 0, &[_]particle.CameraParams{self.camera});
         }
 
-        // Particle Interaction (Attract/Repel)
-        if (input.mouse_down or input.mouse_right_down) {
+        // Camera Rotation (Shift+RMB)
+        if (input.rotate_x != 0 or input.rotate_y != 0) {
+            const rotation_speed: f32 = 0.005;
+            const pi: f32 = 3.14159265;
+
+            // Yaw: horizontal mouse movement rotates around Y axis
+            self.camera.yaw += input.rotate_x * rotation_speed;
+
+            // Pitch: vertical mouse movement rotates around X axis
+            // Clamp pitch to avoid flipping over
+            self.camera.pitch += input.rotate_y * rotation_speed;
+            self.camera.pitch = @max(-pi / 2.0 + 0.1, @min(pi / 2.0 - 0.1, self.camera.pitch));
+
+            self.camera_buffer.writeTyped(particle.CameraParams, 0, &[_]particle.CameraParams{self.camera});
+        }
+
+        // Particle Interaction (LMB only - attracts particles)
+        if (input.mouse_down) {
             const canvas_width_f: f32 = @as(f32, @floatFromInt(self.canvas_width));
             const canvas_height_f: f32 = @as(f32, @floatFromInt(self.canvas_height));
 
-            // Convert mouse to world space (Isometric approximation - this is tricky without raycasting)
-            // For now, assume Z = 0 plane for interaction
+            // Convert mouse to world space (approximate - assumes interaction in center Z plane)
             const mouse_x_ndc = if (canvas_width_f > 0) (input.mouse_x / canvas_width_f) * 2.0 - 1.0 else 0.0;
             const mouse_y_ndc = if (canvas_height_f > 0) 1.0 - (input.mouse_y / canvas_height_f) * 2.0 else 0.0;
 
-            // Inverse isometric projection (approximate)
-            // This is just mapping screen X/Y to world X/Y assuming Z=0.
-            // Better logic would be needed for true 3D interaction.
-            self.options.action_x = self.camera.center_x + mouse_x_ndc * self.camera.extent_x;
-            self.options.action_y = self.camera.center_y + mouse_y_ndc * self.camera.extent_y;
-            self.options.action_z = self.camera.center_z;
+            // Map screen coordinates back to world space (inverse of rotation)
+            // We need to account for camera rotation when computing interaction point
+            const cos_yaw = @cos(self.camera.yaw);
+            const sin_yaw = @sin(self.camera.yaw);
+            const cos_pitch = @cos(self.camera.pitch);
+            const sin_pitch = @sin(self.camera.pitch);
 
-            // Mouse drag (screen space) -> world velocity
+            // Screen space to view space
+            const view_x = mouse_x_ndc * self.camera.extent_x;
+            const view_y = mouse_y_ndc * self.camera.extent_y;
+
+            // Inverse pitch rotation (from view Y to world Y and Z contribution)
+            const y1 = view_y * cos_pitch;
+            const z1 = view_y * sin_pitch;
+
+            // Inverse yaw rotation (from view X to world X and Z)
+            const world_x = view_x * cos_yaw - z1 * sin_yaw + self.camera.center_x;
+            const world_z = view_x * sin_yaw + z1 * cos_yaw + self.camera.center_z;
+            const world_y = y1 + self.camera.center_y;
+
+            self.options.action_x = world_x;
+            self.options.action_y = world_y;
+            self.options.action_z = world_z;
+
+            // Mouse drag -> world velocity
             const drag_x_ndc = if (canvas_width_f > 0) (input.mouse_dx * 2.0) / canvas_width_f else 0.0;
             const drag_y_ndc = if (canvas_height_f > 0) (-input.mouse_dy * 2.0) / canvas_height_f else 0.0;
 
@@ -550,9 +583,9 @@ pub const Simulation = struct {
             self.options.action_vy = self.camera.extent_y * drag_y_ndc;
             self.options.action_vz = 0.0;
 
-            // Set action parameters
+            // Set action parameters - LMB attracts
             self.options.action_radius = self.camera.extent_x / 16.0;
-            self.options.action_force = if (input.mouse_down) 20.0 else -20.0;
+            self.options.action_force = 20.0;
         } else {
             self.options.action_force = 0.0;
             self.options.action_vx = 0.0;

@@ -27,34 +27,38 @@ export class UI {
                 this.exports.setMousePosition(x, y);
             }
 
-            // Handle panning if dragging (Right click or Middle click)
-            // Note: e.buttons is a bitmask: 1=Left, 2=Right, 4=Middle
-            if ((e.buttons & 4) || (e.buttons & 2)) {
-                if (this.exports.setPan) {
-                    this.exports.setPan(e.movementX, e.movementY);
+            // e.buttons is a bitmask: 1=Left, 2=Right, 4=Middle
+            const isRightOrMiddle = (e.buttons & 4) || (e.buttons & 2);
+            
+            if (isRightOrMiddle) {
+                if (e.shiftKey) {
+                    // Shift+RMB or Shift+MMB = Rotate camera
+                    if (this.exports.setRotation) {
+                        this.exports.setRotation(e.movementX, e.movementY);
+                    }
+                } else {
+                    // RMB or MMB without shift = Pan camera
+                    if (this.exports.setPan) {
+                        this.exports.setPan(e.movementX, e.movementY);
+                    }
                 }
             }
         });
 
         // Mouse Down
         canvas.addEventListener('mousedown', (e) => {
-            if (e.button === 0) { // Left
+            if (e.button === 0) { // Left - attract particles
                 if (this.exports.setMouseDown) {
                     this.exports.setMouseDown(true);
                 }
-            } else if (e.button === 2) { // Right
-                if (this.exports.setMouseRightDown) {
-                    this.exports.setMouseRightDown(true);
-                }
             }
+            // RMB no longer triggers particle interaction - just camera control
         });
 
         // Mouse Up
         canvas.addEventListener('mouseup', (e) => {
             if (e.button === 0) { // Left
                 if (this.exports.setMouseDown) this.exports.setMouseDown(false);
-            } else if (e.button === 2) { // Right
-                if (this.exports.setMouseRightDown) this.exports.setMouseRightDown(false);
             }
         });
 
@@ -148,6 +152,17 @@ export class UI {
             });
         }
 
+        // Simulation Depth
+        const simDepthSlider = document.getElementById('simulationDepthSlider');
+        const simDepthText = document.getElementById('simulationDepthText');
+        if (simDepthSlider) {
+            simDepthSlider.addEventListener('input', (e) => {
+                const val = parseInt(e.target.value) * 64;
+                if (simDepthText) simDepthText.innerText = `Depth: ${val}`;
+                this.updateSimulationSize();
+            });
+        }
+
         // Friction
         const frictionSlider = document.getElementById('frictionSlider');
         const frictionText = document.getElementById('frictionText');
@@ -222,6 +237,7 @@ export class UI {
 
         fireInput('particleCountSlider');
         fireInput('speciesCountSlider');
+        fireInput('simulationDepthSlider');
         this.updateSimulationSize();
         fireInput('frictionSlider');
         fireInput('centralForceSlider');
@@ -249,8 +265,9 @@ export class UI {
     updateSimulationSize() {
         const w = Number(document.getElementById('simulationWidthSlider')?.value ?? 16) * 64;
         const h = Number(document.getElementById('simulationHeightSlider')?.value ?? 16) * 64;
+        const d = Number(document.getElementById('simulationDepthSlider')?.value ?? 16) * 64;
         if (this.exports.setSimulationSize) {
-            this.exports.setSimulationSize(w, h);
+            this.exports.setSimulationSize(w, h, d);
         }
     }
 

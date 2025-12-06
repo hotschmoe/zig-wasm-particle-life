@@ -409,8 +409,8 @@ pub const particle_init = common_structs ++
     \\}
 ;
 
-/// Simple particle point rendering shader
-/// Renders each particle as a colored point based on its species (Isometric projection)
+/// Simple particle point rendering shader (legacy fallback)
+/// Renders each particle as a colored point based on its species
 pub const particle_render_point =
     \\// Particle structure (must match Zig layout)
     \\struct Particle {
@@ -437,6 +437,8 @@ pub const particle_render_point =
     \\    extent_x: f32,
     \\    extent_y: f32,
     \\    pixels_per_unit: f32,
+    \\    yaw: f32,
+    \\    pitch: f32,
     \\}
     \\
     \\// Bindings
@@ -460,7 +462,7 @@ pub const particle_render_point =
     \\    let species_index = u32(particle.species);
     \\    let particle_color = species[species_index].color;
     \\    
-    \\    // Particle size in world units (match reference: 1.5)
+    \\    // Particle size in world units
     \\    let size = 1.5;
     \\    
     \\    // Quad vertices (local coordinates)
@@ -475,23 +477,27 @@ pub const particle_render_point =
     \\        local_pos = vec2f(-size, size);
     \\    }
     \\
-    \\    // Isometric projection
-    \\    // x_iso = (x - z) * cos(30)
-    \\    // y_iso = y + (x + z) * sin(30)
-    \\    // Simplified:
-    \\    let cos30 = 0.866;
-    \\    let sin30 = 0.5;
+    \\    // Translate to camera-relative coordinates
+    \\    let dx = particle.x - camera.center_x;
+    \\    let dy = particle.y - camera.center_y;
+    \\    let dz = particle.z - camera.center_z;
     \\
-    \\    let px = particle.x - camera.center_x;
-    \\    let py = particle.y - camera.center_y;
-    \\    let pz = particle.z - camera.center_z;
+    \\    // Rotate around Y axis (yaw)
+    \\    let cos_yaw = cos(camera.yaw);
+    \\    let sin_yaw = sin(camera.yaw);
+    \\    let x1 = dx * cos_yaw + dz * sin_yaw;
+    \\    let z1 = -dx * sin_yaw + dz * cos_yaw;
+    \\    let y1 = dy;
     \\
-    \\    let x_iso = (px - pz) * cos30;
-    \\    let y_iso = py + (px + pz) * sin30;
+    \\    // Rotate around X axis (pitch)
+    \\    let cos_pitch = cos(camera.pitch);
+    \\    let sin_pitch = sin(camera.pitch);
+    \\    let y2 = y1 * cos_pitch - z1 * sin_pitch;
+    \\    let x2 = x1;
     \\    
     \\    // World position (projected)
-    \\    let world_x = x_iso + local_pos.x;
-    \\    let world_y = y_iso + local_pos.y;
+    \\    let world_x = x2 + local_pos.x;
+    \\    let world_y = y2 + local_pos.y;
     \\    
     \\    // Camera transform to NDC
     \\    let ndc_x = world_x / camera.extent_x;
@@ -529,11 +535,16 @@ const common_render_structs =
     \\    color: vec4f,
     \\}
     \\
-    \\// Camera parameters
+    \\// Camera parameters (matches Zig CameraParams struct layout)
     \\struct Camera {
-    \\    center: vec3f,
-    \\    extent: vec2f,
+    \\    center_x: f32,
+    \\    center_y: f32,
+    \\    center_z: f32,
+    \\    extent_x: f32,
+    \\    extent_y: f32,
     \\    pixels_per_unit: f32,
+    \\    yaw: f32,   // Rotation around Y axis
+    \\    pitch: f32, // Rotation around X axis
     \\}
     \\
     \\// Bindings
@@ -546,6 +557,7 @@ const common_render_structs =
     \\    @builtin(position) position: vec4f,
     \\    @location(0) offset: vec2f,
     \\    @location(1) color: vec4f,
+    \\    @location(2) depth_factor: f32, // For depth-based effects
     \\}
     \\
     \\// Quad offsets (2 triangles = 6 vertices)
@@ -558,76 +570,123 @@ const common_render_structs =
     \\    vec2f( 1.0,  1.0),
     \\);
     \\
-    \\fn isometricProject(p: vec3f, camera_center: vec3f) -> vec2f {
-    \\    let cos30 = 0.866;
-    \\    let sin30 = 0.5;
-    \\    let d = p - camera_center;
-    \\    let x = (d.x - d.z) * cos30;
-    \\    let y = d.y + (d.x + d.z) * sin30;
-    \\    return vec2f(x, y);
+    \\// Project a 3D point using camera rotation
+    \\// Returns: vec3f(screen_x, screen_y, view_z for depth)
+    \\fn projectPoint(p: vec3f, cam: Camera) -> vec3f {
+    \\    // Translate to camera-relative coordinates
+    \\    let dx = p.x - cam.center_x;
+    \\    let dy = p.y - cam.center_y;
+    \\    let dz = p.z - cam.center_z;
+    \\
+    \\    // Rotate around Y axis (yaw)
+    \\    let cos_yaw = cos(cam.yaw);
+    \\    let sin_yaw = sin(cam.yaw);
+    \\    let x1 = dx * cos_yaw + dz * sin_yaw;
+    \\    let z1 = -dx * sin_yaw + dz * cos_yaw;
+    \\    let y1 = dy;
+    \\
+    \\    // Rotate around X axis (pitch)
+    \\    let cos_pitch = cos(cam.pitch);
+    \\    let sin_pitch = sin(cam.pitch);
+    \\    let y2 = y1 * cos_pitch - z1 * sin_pitch;
+    \\    let z2 = y1 * sin_pitch + z1 * cos_pitch;
+    \\    let x2 = x1;
+    \\
+    \\    // Orthographic projection (x2, y2 are screen coords, z2 is depth)
+    \\    return vec3f(x2, y2, z2);
     \\}
 ;
 
-/// Glow effect renderer - soft, large halos (Isometric)
+/// Glow effect renderer - soft, large halos with depth
 pub const particle_render_glow = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexGlow(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
     \\    let offset = offsets[id % 6u];
-    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
-    \\    let position = projected_pos + 12.0 * offset;
+    \\    let proj = projectPoint(vec3f(particle.x, particle.y, particle.z), camera);
+    \\    
+    \\    // Depth factor: normalize z to [0, 1] range based on extent
+    \\    // Particles with positive z (further away in view space) get lower factor
+    \\    let max_depth = max(camera.extent_x, camera.extent_y) * 2.0;
+    \\    let depth_factor = clamp(0.5 - proj.z / max_depth, 0.2, 1.0);
+    \\    
+    \\    // Scale glow size based on depth (further = smaller)
+    \\    let glow_size = 12.0 * depth_factor;
+    \\    let position = proj.xy + glow_size * offset;
+    \\    
     \\    return CircleVertexOut(
-    \\        vec4f(position / camera.extent, 0.0, 1.0),
+    \\        vec4f(position.x / camera.extent_x, position.y / camera.extent_y, 0.0, 1.0),
     \\        offset,
-    \\        species[u32(particle.species)].color
+    \\        species[u32(particle.species)].color,
+    \\        depth_factor
     \\    );
     \\}
     \\
     \\@fragment
     \\fn fragmentGlow(in: CircleVertexOut) -> @location(0) vec4f {
     \\    let l = length(in.offset);
-    \\    let alpha = exp(-6.0 * l * l) / 64.0;
+    \\    // Dim glow based on depth
+    \\    let base_alpha = exp(-6.0 * l * l) / 64.0;
+    \\    let alpha = base_alpha * in.depth_factor * in.depth_factor;
     \\    return in.color * vec4f(1.0, 1.0, 1.0, alpha);
     \\}
 ;
 
-/// Circle renderer - solid particles with anti-aliased edges (Isometric)
+/// Circle renderer - solid particles with anti-aliased edges and depth
 pub const particle_render_circle = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexCircle(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
-    \\    let offset = offsets[id % 6u] * 1.5;
-    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
-    \\    let position = projected_pos + offset;
+    \\    let proj = projectPoint(vec3f(particle.x, particle.y, particle.z), camera);
+    \\    
+    \\    // Depth factor: normalize z to [0, 1] range
+    \\    let max_depth = max(camera.extent_x, camera.extent_y) * 2.0;
+    \\    let depth_factor = clamp(0.5 - proj.z / max_depth, 0.2, 1.0);
+    \\    
+    \\    // Scale particle size based on depth (further = smaller)
+    \\    let base_size = 1.5;
+    \\    let scaled_size = base_size * depth_factor;
+    \\    let offset = offsets[id % 6u] * scaled_size;
+    \\    
+    \\    let position = proj.xy + offset;
     \\    return CircleVertexOut(
-    \\        vec4f(position / camera.extent, 0.0, 1.0),
+    \\        vec4f(position.x / camera.extent_x, position.y / camera.extent_y, 0.0, 1.0),
     \\        offset,
-    \\        species[u32(particle.species)].color
+    \\        species[u32(particle.species)].color,
+    \\        depth_factor
     \\    );
     \\}
     \\
     \\@fragment
     \\fn fragmentCircle(in: CircleVertexOut) -> @location(0) vec4f {
     \\    let alpha = clamp(camera.pixels_per_unit - length(in.offset) * camera.pixels_per_unit + 0.5, 0.0, 1.0);
-    \\    return in.color * vec4f(1.0, 1.0, 1.0, alpha);
+    \\    // Dim particles based on depth
+    \\    let dimmed_alpha = alpha * in.depth_factor;
+    \\    return in.color * vec4f(1.0, 1.0, 1.0, dimmed_alpha);
     \\}
 ;
 
-/// Point renderer - tiny square particles (Isometric)
+/// Point renderer - tiny square particles with depth
 pub const particle_render_point_hdr = common_render_structs ++
     \\
     \\@vertex
     \\fn vertexPoint(@builtin(vertex_index) id: u32) -> CircleVertexOut {
     \\    let particle = particles[id / 6u];
+    \\    let proj = projectPoint(vec3f(particle.x, particle.y, particle.z), camera);
+    \\    
+    \\    // Depth factor
+    \\    let max_depth = max(camera.extent_x, camera.extent_y) * 2.0;
+    \\    let depth_factor = clamp(0.5 - proj.z / max_depth, 0.2, 1.0);
+    \\    
     \\    let offset = 2.0 * offsets[id % 6u] / camera.pixels_per_unit;
-    \\    let projected_pos = isometricProject(vec3f(particle.x, particle.y, particle.z), camera.center);
-    \\    let position = projected_pos + offset;
+    \\    let position = proj.xy + offset;
     \\    return CircleVertexOut(
-    \\        vec4f(position / camera.extent, 0.0, 1.0),
+    \\        vec4f(position.x / camera.extent_x, position.y / camera.extent_y, 0.0, 1.0),
     \\        offset,
-    \\        species[u32(particle.species)].color
+    \\        species[u32(particle.species)].color,
+    \\        depth_factor
     \\    );
     \\}
     \\
@@ -636,7 +695,7 @@ pub const particle_render_point_hdr = common_render_structs ++
     \\@fragment
     \\fn fragmentPoint(in: CircleVertexOut) -> @location(0) vec4f {
     \\    let d = max(vec2(0.0), min(in.offset * camera.pixels_per_unit + 0.5, vec2(camera.pixels_per_unit)) - max(in.offset * camera.pixels_per_unit - 0.5, -vec2(camera.pixels_per_unit)));
-    \\    let alpha = (PI / 4.0) * d.x * d.y;
+    \\    let alpha = (PI / 4.0) * d.x * d.y * in.depth_factor;
     \\    return vec4f(in.color.rgb, in.color.a * alpha);
     \\}
 ;

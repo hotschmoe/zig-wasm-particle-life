@@ -8,13 +8,15 @@ pub const InputState = struct {
     mouse_dx: f32 = 0,
     mouse_dy: f32 = 0,
     mouse_initialized: bool = false,
-    mouse_down: bool = false,
-    mouse_right_down: bool = false,
+    mouse_down: bool = false, // LMB - attract particles
+    mouse_right_down: bool = false, // RMB without shift - pan
 
     // Camera control
     zoom_delta: f32 = 0,
     pan_x: f32 = 0,
     pan_y: f32 = 0,
+    rotate_x: f32 = 0, // Rotation around vertical axis (yaw)
+    rotate_y: f32 = 0, // Rotation around horizontal axis (pitch)
 
     // Simulation options
     friction: f32 = 10.0, // Matches reference default
@@ -28,6 +30,8 @@ pub const InputState = struct {
         self.zoom_delta = 0;
         self.pan_x = 0;
         self.pan_y = 0;
+        self.rotate_x = 0;
+        self.rotate_y = 0;
         self.mouse_dx = 0;
         self.mouse_dy = 0;
     }
@@ -66,6 +70,11 @@ export fn setZoom(delta: f32) void {
 export fn setPan(dx: f32, dy: f32) void {
     state.pan_x = dx;
     state.pan_y = dy;
+}
+
+export fn setRotation(dx: f32, dy: f32) void {
+    state.rotate_x = dx;
+    state.rotate_y = dy;
 }
 
 export fn setSimOption(key: u32, value: f32) void {
