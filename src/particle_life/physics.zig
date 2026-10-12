@@ -17,8 +17,8 @@ const types = @import("types.zig");
 /// Must match `@workgroup_size` in every compute shader.
 const workgroup_size = 64;
 
-/// Edge length of a spatial bin. Must be at least the largest force radius.
-pub const bin_size = 80.0;
+/// Edge length of a spatial bin: the largest force radius, so neighbours lie in the 3x3 bins around a particle.
+pub const bin_size = system.max_force_radius;
 
 /// Dynamic uniform offsets must be a multiple of `minUniformBufferOffsetAlignment`.
 const uniform_stride = 256;
@@ -229,6 +229,4 @@ fn writePrefixSteps(buffer: gpu.Buffer, steps: u32) void {
     gpu.writeBuffer(buffer, std.mem.sliceAsBytes(data[0 .. @max(steps, 1) * uniform_stride / @sizeOf(u32)]));
 }
 
-comptime {
-    std.debug.assert(system.max_force_radius <= bin_size);
-}
+comptime {}
