@@ -217,6 +217,7 @@ async function main() {
         ({ instance: wasm } = await WebAssembly.instantiate(await response.arrayBuffer(), { env, gpu }));
 
         wasm.exports.init(Math.floor(Math.random() * 0xFFFFFFFF));
+        if (blueNoise) wasm.exports.setBlueNoise(blueNoise);
         resizeCanvas(canvas);
         window.addEventListener('resize', () => resizeCanvas(canvas));
 
