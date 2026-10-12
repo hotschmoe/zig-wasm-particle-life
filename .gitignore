@@ -2,3 +2,4 @@
 zig-out/
 
 /dist/
+/web/app.wasm
