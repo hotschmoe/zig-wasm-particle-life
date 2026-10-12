@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
 
     // Build Options
     const options = b.addOptions();
-    options.addOption(i64, "build_timestamp", std.time.timestamp());
+    options.addOption(i64, "build_timestamp", std.Io.Timestamp.now(b.graph.io, .real).toSeconds());
 
     // Create a module for the WASM code
     const root_module = b.createModule(.{
