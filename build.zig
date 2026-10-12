@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.option(std.builtin.Optimize, "optimize", "Optimization mode (default: small)") orelse .small;
 
     const options = b.addOptions();
-    options.addOption(i64, "build_timestamp", std.Io.Timestamp.now(b.graph.io, .real).toSeconds());
+    options.addOption([]const u8, "build_time", buildTime(b));
 
     const exe = b.addExecutable(.{
         .name = "app",
@@ -14,9 +14,9 @@ pub fn build(b: *std.Build) void {
             .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
             .optimize = optimize,
             .strip = true,
+            .imports = &.{.{ .name = "build_options", .module = options.createModule() }},
         }),
     });
-    exe.root_module.addOptions("build_options", options);
     exe.entry = .disabled;
     exe.export_memory = true;
     exe.rdynamic = true;
@@ -49,4 +49,21 @@ pub fn build(b: *std.Build) void {
     serve.setCwd(b.path("web"));
     serve.step.dependOn(dev);
     run.dependOn(&serve.step);
+}
+
+/// UTC timestamp of the configure phase, shown in the browser console to tell builds apart.
+fn buildTime(b: *std.Build) []const u8 {
+    const now = std.Io.Timestamp.now(b.graph.io, .real).toSeconds();
+    const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(now) };
+    const day = epoch.getEpochDay().calculateYearDay();
+    const month_day = day.calculateMonthDay();
+    const time = epoch.getDaySeconds();
+    return b.fmt("{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
+        day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        time.getHoursIntoDay(),
+        time.getMinutesIntoHour(),
+        time.getSecondsIntoMinute(),
+    });
 }
