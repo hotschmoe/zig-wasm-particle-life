@@ -64,15 +64,15 @@ pub const BindEntry = extern struct {
     size: u32,
 
     pub fn buffer(handle: Buffer) BindEntry {
-        return .{ .resource = @intFromEnum(handle), .size = 0 };
+        return .{ .resource = @backingInt(handle), .size = 0 };
     }
 
     pub fn bufferRange(handle: Buffer, size: u32) BindEntry {
-        return .{ .resource = @intFromEnum(handle), .size = size };
+        return .{ .resource = @backingInt(handle), .size = size };
     }
 
     pub fn textureView(handle: TextureView) BindEntry {
-        return .{ .resource = @intFromEnum(handle), .size = 0 };
+        return .{ .resource = @backingInt(handle), .size = 0 };
     }
 };
 
@@ -94,7 +94,7 @@ pub const RenderPipelineDesc = struct {
 
 /// Owns a group of GPU objects and releases them together, newest first.
 pub const Pool = struct {
-    const capacity = 96;
+    const capacity = 64;
 
     ids: [capacity]u32 = undefined,
     len: usize = 0,
@@ -114,7 +114,7 @@ pub const Pool = struct {
         }
         pool.ids[pool.len] = raw;
         pool.len += 1;
-        return @enumFromInt(raw);
+        return @fromBackingInt(@intCast(raw));
     }
 
     pub fn buffer(pool: *Pool, size: u32, usage: BufferUsage) Error!Buffer {
@@ -130,7 +130,7 @@ pub const Pool = struct {
     }
 
     pub fn bindGroup(pool: *Pool, layout: BindGroupLayout, entries: []const BindEntry) Error!BindGroup {
-        return pool.adopt(BindGroup, js.createBindGroup(@intFromEnum(layout), entries.ptr, entries.len));
+        return pool.adopt(BindGroup, js.createBindGroup(@backingInt(layout), entries.ptr, entries.len));
     }
 
     pub fn computePipeline(
@@ -139,13 +139,13 @@ pub const Pool = struct {
         entry: []const u8,
         layouts: []const BindGroupLayout,
     ) Error!ComputePipeline {
-        const raw = js.createComputePipeline(@intFromEnum(module), entry.ptr, entry.len, layouts.ptr, layouts.len);
+        const raw = js.createComputePipeline(@backingInt(module), entry.ptr, entry.len, layouts.ptr, layouts.len);
         return pool.adopt(ComputePipeline, raw);
     }
 
     pub fn renderPipeline(pool: *Pool, desc: RenderPipelineDesc) Error!RenderPipeline {
         const raw = js.createRenderPipeline(
-            @intFromEnum(desc.module),
+            @backingInt(desc.module),
             desc.vertex_entry.ptr,
             desc.vertex_entry.len,
             desc.fragment_entry.ptr,
@@ -163,12 +163,12 @@ pub const Pool = struct {
     }
 
     pub fn textureView(pool: *Pool, texture: Texture) Error!TextureView {
-        return pool.adopt(TextureView, js.createTextureView(@intFromEnum(texture)));
+        return pool.adopt(TextureView, js.createTextureView(@backingInt(texture)));
     }
 };
 
 pub fn writeBuffer(buffer: Buffer, bytes: []const u8) void {
-    js.writeBuffer(@intFromEnum(buffer), bytes.ptr, bytes.len);
+    js.writeBuffer(@backingInt(buffer), bytes.ptr, bytes.len);
 }
 
 /// Uploads one value, e.g. a uniform struct.
@@ -183,24 +183,24 @@ pub const Encoder = enum(u32) {
     _,
 
     pub fn create() Encoder {
-        return @enumFromInt(js.createEncoder());
+        return @fromBackingInt(@intCast(js.createEncoder()));
     }
 
     pub fn beginComputePass(encoder: Encoder) ComputePass {
-        return @enumFromInt(js.beginComputePass(@intFromEnum(encoder)));
+        return @fromBackingInt(@intCast(js.beginComputePass(@backingInt(encoder))));
     }
 
     pub fn beginRenderPass(encoder: Encoder, target: TextureView, clear: ClearColor) RenderPass {
-        return @enumFromInt(js.beginRenderPass(@intFromEnum(encoder), @intFromEnum(target), clear[0], clear[1], clear[2], clear[3]));
+        return @fromBackingInt(@intCast(js.beginRenderPass(@backingInt(encoder), @backingInt(target), clear[0], clear[1], clear[2], clear[3])));
     }
 
     pub fn beginCanvasPass(encoder: Encoder, clear: ClearColor) RenderPass {
-        return @enumFromInt(js.beginCanvasPass(@intFromEnum(encoder), clear[0], clear[1], clear[2], clear[3]));
+        return @fromBackingInt(@intCast(js.beginCanvasPass(@backingInt(encoder), clear[0], clear[1], clear[2], clear[3])));
     }
 
     /// Finishes the encoder and submits it to the queue.
     pub fn submit(encoder: Encoder) void {
-        js.submit(@intFromEnum(encoder));
+        js.submit(@backingInt(encoder));
     }
 };
 
@@ -208,23 +208,23 @@ pub const ComputePass = enum(u32) {
     _,
 
     pub fn setPipeline(pass: ComputePass, pipeline: ComputePipeline) void {
-        js.passSetPipeline(@intFromEnum(pass), @intFromEnum(pipeline));
+        js.passSetPipeline(@backingInt(pass), @backingInt(pipeline));
     }
 
     pub fn setBindGroup(pass: ComputePass, index: u32, group: BindGroup) void {
-        js.passSetBindGroup(@intFromEnum(pass), index, @intFromEnum(group));
+        js.passSetBindGroup(@backingInt(pass), index, @backingInt(group));
     }
 
     pub fn setBindGroupOffset(pass: ComputePass, index: u32, group: BindGroup, offset: u32) void {
-        js.passSetBindGroupOffset(@intFromEnum(pass), index, @intFromEnum(group), offset);
+        js.passSetBindGroupOffset(@backingInt(pass), index, @backingInt(group), offset);
     }
 
     pub fn dispatch(pass: ComputePass, workgroups: u32) void {
-        js.dispatch(@intFromEnum(pass), workgroups);
+        js.dispatch(@backingInt(pass), workgroups);
     }
 
     pub fn end(pass: ComputePass) void {
-        js.passEnd(@intFromEnum(pass));
+        js.passEnd(@backingInt(pass));
     }
 };
 
@@ -232,19 +232,19 @@ pub const RenderPass = enum(u32) {
     _,
 
     pub fn setPipeline(pass: RenderPass, pipeline: RenderPipeline) void {
-        js.passSetPipeline(@intFromEnum(pass), @intFromEnum(pipeline));
+        js.passSetPipeline(@backingInt(pass), @backingInt(pipeline));
     }
 
     pub fn setBindGroup(pass: RenderPass, index: u32, group: BindGroup) void {
-        js.passSetBindGroup(@intFromEnum(pass), index, @intFromEnum(group));
+        js.passSetBindGroup(@backingInt(pass), index, @backingInt(group));
     }
 
     pub fn draw(pass: RenderPass, vertex_count: u32) void {
-        js.draw(@intFromEnum(pass), vertex_count);
+        js.draw(@backingInt(pass), vertex_count);
     }
 
     pub fn end(pass: RenderPass) void {
-        js.passEnd(@intFromEnum(pass));
+        js.passEnd(@backingInt(pass));
     }
 };
 

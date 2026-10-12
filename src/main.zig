@@ -19,6 +19,9 @@ pub const std_options: std.Options = .{
 
 const log = std.log;
 
+const max_particles = 1 << 20;
+const min_world_size = 64;
+
 const App = struct {
     input: input_state.Input = .{},
     settings: input_state.Settings = .{},
@@ -68,7 +71,7 @@ export fn init(seed: u32) void {
 
 /// Called once the blue-noise dither texture is uploaded.
 export fn setBlueNoise(view: u32) void {
-    const handle: gpu.TextureView = @enumFromInt(view);
+    const handle: gpu.TextureView = @fromBackingInt(@intCast(view));
     app.blue_noise = handle;
     const sim = &(app.sim orelse return);
     sim.setBlueNoise(handle) catch |err| {
@@ -177,9 +180,6 @@ export fn setLoopingBorders(enabled: bool) void {
 export fn setSymmetricForces(enabled: bool) void {
     app.settings.symmetric_forces = enabled;
 }
-
-const max_particles = 1 << 20;
-const min_world_size = 64;
 
 fn consoleLog(
     comptime level: log.Level,

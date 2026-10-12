@@ -27,7 +27,7 @@ pub const Rng = struct {
         return t;
     }
 
-    /// Uniform in [0, 1].
+    /// Uniform in [0, 1]; 1 is reachable through f32 rounding.
     pub fn next(rng: *Rng) f32 {
         return @as(f32, @floatFromInt(rng.nextU32())) / 4294967296.0;
     }
